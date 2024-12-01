@@ -10,7 +10,11 @@ const port = process.env.PORT || 5000;
 
 // Middleware setup
 app.use(cors({
-  origin: ['http://localhost:5173'], // Update this in production
+  origin: [
+    // 'http://localhost:5173',
+    'https://car-doctor-ba615.web.app/',
+    'https://car-doctor-ba615.firebaseapp.com/'
+],
   credentials: true
 }));
 app.use(express.json());
