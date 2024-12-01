@@ -11,11 +11,12 @@ const port = process.env.PORT || 5000;
 // Middleware setup
 app.use(cors({
   origin: [
-    // 'http://localhost:5173',
     'https://car-doctor-ba615.web.app',
     'https://car-doctor-ba615.firebaseapp.com'
-],
-  credentials: true
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 app.use(cookieParser());
@@ -32,21 +33,23 @@ const client = new MongoClient(uri, {
 
 // Logger middleware for tracking requests
 const logger = (req, res, next) => {
-  console.log('Request:', req.method, req.originalUrl);
+  console.log(`Request: ${req.method} ${req.originalUrl}`);
   next();
 };
 
 // JWT token verification middleware
 const verifyToken = (req, res, next) => {
   const token = req.cookies?.token;
-  console.log('JWT token:', token);
+  console.log('JWT token received:', token);
 
-  if (!token) return res.status(401).send({ message: 'Unauthorized access' });
+  if (!token) {
+    return res.status(401).send({ message: 'Unauthorized access' });
+  }
 
   jwt.verify(token, process.env.SECRET_ACCESS_TOKEN, (err, decoded) => {
     if (err) {
-      console.log('JWT error:', err);
-      return res.status(401).send({ message: 'Invalid token' });
+      console.log('JWT verification error:', err.message);
+      return res.status(401).send({ message: 'Invalid or expired token' });
     }
     req.user = decoded;
     next();
@@ -68,11 +71,11 @@ async function run() {
     app.post('/jwt', logger, (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.SECRET_ACCESS_TOKEN, { expiresIn: '1h' });
-      res.cookie('token', token, { httpOnly: true, secure: false }).send({ success: true });
+      res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' }).send({ success: true });
     });
 
     // Route to log out user and clear token
-    app.post('/logout', (req, res) => {
+    app.post('/logout', logger, (req, res) => {
       console.log('Logging out user');
       res.clearCookie('token').send({ success: true });
     });
@@ -89,7 +92,7 @@ async function run() {
     });
 
     // Get specific service by ID
-    app.get('/services/:id', async (req, res) => {
+    app.get('/services/:id', logger, async (req, res) => {
       try {
         const id = req.params.id;
         const service = await serviceCollection.findOne(
@@ -104,7 +107,7 @@ async function run() {
     });
 
     // Create a new booking
-    app.post('/bookings', async (req, res) => {
+    app.post('/bookings', logger, async (req, res) => {
       try {
         const booking = req.body;
         const result = await bookingCollection.insertOne(booking);
@@ -115,29 +118,32 @@ async function run() {
       }
     });
 
-    // Get bookings, with optional email filter and token verification
+    // Get bookings with token verification
     app.get('/bookings', logger, verifyToken, async (req, res) => {
-      console.log(req.query.email);
-      console.log('Token owner info: ', req.user);
-      if (req.user.email !== req.query.email) {
-        return res.status(403).send({ message: 'Forbidden access' })
+      console.log('Requested by user:', req.user);
+      const { email } = req.query;
+
+      if (req.user.email !== email) {
+        return res.status(403).send({ message: 'Forbidden access' });
       }
-      let query = {};
-      if (req.query?.email) {
-        query = { email: req.query.email }
+
+      try {
+        const bookings = await bookingCollection.find({ email }).toArray();
+        res.send(bookings);
+      } catch (error) {
+        console.error("Failed to retrieve bookings:", error);
+        res.status(500).send({ message: 'Failed to retrieve bookings' });
       }
-      const result = await bookingCollection.find(query).toArray()
-      res.send(result)
     });
 
     // Update booking status by ID
-    app.patch('/bookings/:id', async (req, res) => {
+    app.patch('/bookings/:id', logger, async (req, res) => {
       try {
         const id = req.params.id;
-        const updatedBooking = req.body;
+        const { status } = req.body;
         const result = await bookingCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { status: updatedBooking.status } }
+          { $set: { status } }
         );
         res.send(result);
       } catch (error) {
@@ -147,7 +153,7 @@ async function run() {
     });
 
     // Delete a booking by ID
-    app.delete('/bookings/:id', async (req, res) => {
+    app.delete('/bookings/:id', logger, async (req, res) => {
       try {
         const id = req.params.id;
         const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
